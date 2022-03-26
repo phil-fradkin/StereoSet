@@ -12,6 +12,8 @@ from joblib import Parallel, delayed
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModelForPreTraining
 
 import dataloader
 from intersentence_loader import IntersentenceDataset
@@ -25,6 +27,10 @@ def parse_args():
     pretrained_model_choices = ['bert-base-uncased', 'bert-base-cased', "bert-large-uncased-whole-word-masking",
                                 'bert-large-uncased', 'bert-large-cased', 'gpt2', 'gpt2-medium', 'gpt2-large', 'roberta-base',
                                 'roberta-large', 'xlnet-base-cased', 'xlnet-large-cased']
+
+    intrasentence_models = [
+        'BertLM', 'BertNextSentence', 'RoBERTaLM', 'XLNetLM', 'XLMLM', 'GPT2LM', 'ModelNSP'
+    ] + [f"multiberts-seed_{i}" for i in range(25)]
     tokenizer_choices = ["RobertaTokenizer", "BertTokenizer", "XLNetTokenizer"]
     parser = ArgumentParser()
     parser.add_argument(
@@ -42,8 +48,7 @@ def parse_args():
 
     parser.add_argument("--skip-intrasentence", help="Skip intrasentence evaluation.",
                         default=False, action="store_true")
-    parser.add_argument("--intrasentence-model", type=str, default='BertLM', choices=[
-                        'BertLM', 'BertNextSentence', 'RoBERTaLM', 'XLNetLM', 'XLMLM', 'GPT2LM', 'ModelNSP'],
+    parser.add_argument("--intrasentence-model", type=str, default='BertLM', choices=intrasentence_models,
                         help="Choose a model architecture for the intrasentence task.")
     parser.add_argument("--intrasentence-load-path", default=None,
                         help="Load a pretrained model for the intrasentence task.")
@@ -82,10 +87,18 @@ class BiasEvaluator():
         self.INTRASENTENCE_LOAD_PATH = intrasentence_load_path
         self.INTERSENTENCE_LOAD_PATH = intersentence_load_path
 
+        self.INTRASENTENCE_MODEL = intrasentence_model
+        self.INTERSENTENCE_MODEL = intersentence_model
+
         self.PRETRAINED_CLASS = pretrained_class
         self.TOKENIZER = tokenizer
-        self.tokenizer = getattr(transformers, self.TOKENIZER).from_pretrained(
-            self.PRETRAINED_CLASS, padding_side="right")
+
+        if self.INTRASENTENCE_MODEL.split('_')[0] == "multiberts-seed":
+            self.tokenizer = BertTokenizer.from_pretrained(
+                f'google/{self.INTRASENTENCE_MODEL}', padding_side='right')
+        else:
+            self.tokenizer = getattr(transformers, self.TOKENIZER).from_pretrained(
+                self.PRETRAINED_CLASS, padding_side="right")
 
         # to keep padding consistent with the other models -> improves LM score.
         if self.tokenizer.__class__.__name__ == "XLNetTokenizer":
@@ -100,9 +113,6 @@ class BiasEvaluator():
             self.MASK_TOKEN, add_special_tokens=False)
         assert len(self.MASK_TOKEN_IDX) == 1
         self.MASK_TOKEN_IDX = self.MASK_TOKEN_IDX[0]
-
-        self.INTRASENTENCE_MODEL = intrasentence_model
-        self.INTERSENTENCE_MODEL = intersentence_model
 
         print("---------------------------------------------------------------")
         print(
@@ -123,8 +133,16 @@ class BiasEvaluator():
         print("---------------------------------------------------------------")
 
     def evaluate_intrasentence(self):
-        model = getattr(models, self.INTRASENTENCE_MODEL)(
-            self.PRETRAINED_CLASS).to(self.device)
+        if self.INTRASENTENCE_MODEL.split('_')[0] == "multiberts-seed":
+            print(f"Model name to be used: {self.INTRASENTENCE_MODEL}")
+
+            # model = transformers.BertModel.from_pretrained(f"google/{self.INTRASENTENCE_MODEL}").to(self.device)
+            model = AutoModelForPreTraining.from_pretrained(
+                f"google/{self.INTRASENTENCE_MODEL}").to(self.device)
+
+        else:
+            model = getattr(models, self.INTRASENTENCE_MODEL)(
+                self.PRETRAINED_CLASS).to(self.device)
 
         if torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!")

@@ -7,16 +7,25 @@ from collections import defaultdict
 import numpy as np
 import dataloader
 
+def str2bool(input_to_eval):
+    if input_to_eval.lower() in ['true', 't', '1', 'yes']:
+        return True
+    else:
+        return False
+
+
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--gold-file", required=True)
     parser.add_argument("--predictions-file", default=None)
     parser.add_argument("--predictions-dir", default=None)
     parser.add_argument("--output-file", default=None)
+    parser.add_argument('--skip-intersentence', default=True, type=str2bool)
+
     return parser.parse_args()
 
 class ScoreEvaluator(object):
-    def __init__(self, gold_file_path, predictions_file_path):
+    def __init__(self, gold_file_path, predictions_file_path, skip_intersentence):
         """
         Evaluates the results of a StereoSet predictions file with respect to the gold label file.
 
@@ -30,7 +39,8 @@ class ScoreEvaluator(object):
         # cluster ID, gold_label to sentence ID
         stereoset = dataloader.StereoSet(gold_file_path) 
         self.intersentence_examples = stereoset.get_intersentence_examples() 
-        self.intrasentence_examples = stereoset.get_intrasentence_examples() 
+        self.intrasentence_examples = stereoset.get_intrasentence_examples()
+        self.skip_intersentence = skip_intersentence
         self.id2term = {}
         self.id2gold = {}
         self.id2score = {}
@@ -60,13 +70,29 @@ class ScoreEvaluator(object):
 
         results = defaultdict(lambda: {})
 
-        for split in ['intrasentence', 'intersentence']:
+        if self.skip_intersentence:
+            tasks = ['intrasentence']
+        else:
+            tasks = ['intrasentence', 'intersentence']
+
+        for split in tasks:
             for domain in ['gender', 'profession', 'race', 'religion']:
                 results[split][domain] = self.evaluate(self.domain2example[split][domain])
 
-        results['intersentence']['overall'] = self.evaluate(self.intersentence_examples) 
+        # do a real evaluation
+        if not self.skip_intersentence:
+            results['intersentence']['overall'] = self.evaluate(self.intersentence_examples)
+            results['overall'] = self.evaluate(self.intersentence_examples + self.intrasentence_examples)
+
+        # assign dummy results
+        else:
+            results['overall'] = self.evaluate(self.intrasentence_examples)
+            results['intersentence']['overall'] = {
+                "Count": -1, "LM Score": -1, "SS Score": -1, "ICAT Score": -1
+            }
+
+
         results['intrasentence']['overall'] = self.evaluate(self.intrasentence_examples) 
-        results['overall'] = self.evaluate(self.intersentence_examples + self.intrasentence_examples)
         self.results = results
 
     def get_overall_results(self):
@@ -147,9 +173,12 @@ class ScoreEvaluator(object):
         return results
 
 
-def parse_file(gold_file, predictions_file):
+def parse_file(gold_file, predictions_file, skip_intersentence):
     score_evaluator = ScoreEvaluator(
-        gold_file_path=gold_file, predictions_file_path=predictions_file)
+        gold_file_path=gold_file,
+        predictions_file_path=predictions_file,
+        skip_intersentence=skip_intersentence
+    )
     overall = score_evaluator.get_overall_results()
     score_evaluator.pretty_print(overall)
 
@@ -190,6 +219,6 @@ if __name__ == "__main__":
         for prediction_file in glob(predictions_dir + "*.json"): 
             print()
             print(f"Evaluating {prediction_file}...")
-            parse_file(args.gold_file, prediction_file) 
+            parse_file(args.gold_file, prediction_file, args.skip_intersentence)
     else:
-        parse_file(args.gold_file, args.predictions_file) 
+        parse_file(args.gold_file, args.predictions_file, args.skip_intersentence)

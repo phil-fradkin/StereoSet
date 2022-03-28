@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import BertTokenizer, BertModel
 from transformers import AutoTokenizer, AutoModelForPreTraining
+from transformers import AutoModelForMaskedLM, AutoModelForNextSentencePrediction
 
 import dataloader
 from intersentence_loader import IntersentenceDataset
@@ -22,15 +23,22 @@ from models import models
 init()
 
 
+
 def parse_args():
     """ Parses the command line arguments. """
-    pretrained_model_choices = ['bert-base-uncased', 'bert-base-cased', "bert-large-uncased-whole-word-masking",
-                                'bert-large-uncased', 'bert-large-cased', 'gpt2', 'gpt2-medium', 'gpt2-large', 'roberta-base',
-                                'roberta-large', 'xlnet-base-cased', 'xlnet-large-cased']
+    pretrained_model_choices = [
+        'bert-base-uncased', 'bert-base-cased', "bert-large-uncased-whole-word-masking",
+        'bert-large-uncased', 'bert-large-cased', 'gpt2', 'gpt2-medium', 'gpt2-large', 'roberta-base',
+        'roberta-large', 'xlnet-base-cased', 'xlnet-large-cased']
 
-    intrasentence_models = [
+    size_models = ['mobilebert-uncased', 'bert-base-uncased', 'bert-large-uncased']
+    roberta_comparison = ['bert-base-cased', 'bert-large-cased', 'roberta-base', 'roberta-large']
+
+    multibert_models = [f"multiberts-seed_{i}" for i in range(25)]
+    llm_names = [
         'BertLM', 'BertNextSentence', 'RoBERTaLM', 'XLNetLM', 'XLMLM', 'GPT2LM', 'ModelNSP'
-    ] + [f"multiberts-seed_{i}" for i in range(25)]
+    ] + multibert_models + size_models + roberta_comparison
+
     tokenizer_choices = ["RobertaTokenizer", "BertTokenizer", "XLNetTokenizer"]
     parser = ArgumentParser()
     parser.add_argument(
@@ -47,15 +55,16 @@ def parse_args():
                         help="Choose the name of the predictions file")
 
     parser.add_argument("--skip-intrasentence", help="Skip intrasentence evaluation.",
-                        default=False, action="store_true")
-    parser.add_argument("--intrasentence-model", type=str, default='BertLM', choices=intrasentence_models,
+                        default=False, action="store_true", )
+    parser.add_argument("--intrasentence-model", type=str, default='BertLM', choices=llm_names,
                         help="Choose a model architecture for the intrasentence task.")
     parser.add_argument("--intrasentence-load-path", default=None,
                         help="Load a pretrained model for the intrasentence task.")
     parser.add_argument("--skip-intersentence",
-                        default=False, action="store_true", help="Skip intersentence evaluation.")
-    parser.add_argument("--intersentence-model", type=str, default='BertNextSentence', choices=[
-                        'BertLM', 'BertNextSentence', 'RoBERTaLM', 'XLNetLM', 'XLMLM', 'GPT2LM', 'ModelNSP'],
+                        default=False, action="store_true",
+                        help="Skip intersentence evaluation.", )
+    parser.add_argument("--intersentence-model", type=str, default='BertNextSentence',
+                        choices=llm_names,
                         help="Choose the model for the intersentence task.")
     parser.add_argument("--intersentence-load-path", default=None,
                         help="Path to the pretrained model for the intersentence task.")
@@ -93,16 +102,9 @@ class BiasEvaluator():
         self.PRETRAINED_CLASS = pretrained_class
         self.TOKENIZER = tokenizer
 
-        if self.INTRASENTENCE_MODEL.split('_')[0] == "multiberts-seed":
-            self.tokenizer = BertTokenizer.from_pretrained(
-                f'google/{self.INTRASENTENCE_MODEL}', padding_side='right')
-        else:
-            self.tokenizer = getattr(transformers, self.TOKENIZER).from_pretrained(
-                self.PRETRAINED_CLASS, padding_side="right")
+        assert self.INTRASENTENCE_MODEL == self.INTERSENTENCE_MODEL
+        self.load_tokenizer(self.INTRASENTENCE_MODEL)
 
-        # to keep padding consistent with the other models -> improves LM score.
-        if self.tokenizer.__class__.__name__ == "XLNetTokenizer":
-            self.tokenizer.padding_side = "right"
         self.MASK_TOKEN = self.tokenizer.mask_token
 
         # Set this to be none if you don't want to batch items together!
@@ -132,17 +134,70 @@ class BiasEvaluator():
         print(f"{Fore.LIGHTCYAN_EX}CUDA:{Style.RESET_ALL} {self.cuda}")
         print("---------------------------------------------------------------")
 
-    def evaluate_intrasentence(self):
-        if self.INTRASENTENCE_MODEL.split('_')[0] == "multiberts-seed":
-            print(f"Model name to be used: {self.INTRASENTENCE_MODEL}")
+    def load_tokenizer(self, model_name):
+        if model_name.split('_')[0] == "multiberts-seed":
+            self.tokenizer = BertTokenizer.from_pretrained(
+                f'google/{model_name}', padding_side='right')
 
-            # model = transformers.BertModel.from_pretrained(f"google/{self.INTRASENTENCE_MODEL}").to(self.device)
-            model = AutoModelForPreTraining.from_pretrained(
-                f"google/{self.INTRASENTENCE_MODEL}").to(self.device)
+        elif model_name in [
+            'mobilebert-uncased', 'bert-base-uncased', 'bert-large-uncased',
+            'roberta-large', 'roberta-base', 'bert-base-cased', 'bert-large-cased'
+        ]:
+            if model_name == 'mobilebert-uncased':
+                temp_model_name = 'google/mobilebert-uncased'
+            else:
+                temp_model_name = model_name
+
+            self.tokenizer = AutoTokenizer.from_pretrained(temp_model_name, padding_side='right')
+            # self.tokenizer = BertTokenizer.from_pretrained(
+            #     f'{model_name}', padding_side='right')
 
         else:
-            model = getattr(models, self.INTRASENTENCE_MODEL)(
+            self.tokenizer = getattr(transformers, self.TOKENIZER).from_pretrained(
+                self.PRETRAINED_CLASS, padding_side="right")
+
+        # to keep padding consistent with the other models -> improves LM score.
+        if self.tokenizer.__class__.__name__ == "XLNetTokenizer":
+            self.tokenizer.padding_side = "right"
+
+
+
+    def load_model(self, model_name, prediction_task='local'):
+        print(f"Model name to be used: {model_name}")
+
+        if model_name.split('_')[0] == "multiberts-seed":
+            model = AutoModelForPreTraining.from_pretrained(
+                f"google/{model_name}").to(self.device)
+
+        elif model_name in [
+            'mobilebert-uncased', 'bert-base-uncased', 'bert-large-uncased',
+            'roberta-large', 'roberta-base', 'bert-base-cased', 'bert-large-cased'
+        ]:
+
+            if model_name == 'mobilebert-uncased':
+                temp_model_name = 'google/mobilebert-uncased'
+            else:
+                temp_model_name = model_name
+
+            if prediction_task=='local':
+                model = AutoModelForMaskedLM.from_pretrained(temp_model_name).to(self.device)
+            elif prediction_task == 'global':
+
+                # can't do global prediction task for Roberta
+                assert 'roberta' not in temp_model_name, temp_model_name
+
+                model = AutoModelForNextSentencePrediction.from_pretrained(
+                    temp_model_name).to(self.device)
+            else:
+                raise ValueError
+        else:
+            model = getattr(models, model_name)(
                 self.PRETRAINED_CLASS).to(self.device)
+        return model
+
+
+    def evaluate_intrasentence(self):
+        model = self.load_model(self.INTRASENTENCE_MODEL)
 
         if torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!")
@@ -205,8 +260,8 @@ class BiasEvaluator():
         print()
         print(
             f"{Fore.LIGHTBLUE_EX}Evaluating bias on intersentence tasks...{Style.RESET_ALL}")
-        model = getattr(models, self.INTERSENTENCE_MODEL)(
-            self.PRETRAINED_CLASS).to(self.device)
+
+        model = self.load_model(self.INTERSENTENCE_MODEL, prediction_task='global')
 
         print(f"Number of parameters: {self.count_parameters(model):,}")
         print("Let's use", torch.cuda.device_count(), "GPUs!")
@@ -237,7 +292,13 @@ class BiasEvaluator():
                 outputs = model(input_ids, token_type_ids=token_type_ids)
                 if type(outputs) == tuple:
                     outputs = outputs[0]
-                outputs = torch.softmax(outputs, dim=1)
+
+                if "logits" in dir(outputs):
+                    outputs = torch.softmax(outputs.logits, dim=1)
+                elif 'seq_relationship_logits' in dir(outputs):
+                    outputs = torch.softmax(outputs.seq_relationship_logits, dim=1)
+                else:
+                    raise ValueError
 
                 for idx in range(input_ids.shape[0]):
                     probabilities = {}

@@ -6,28 +6,28 @@ size_models = [
     'bert-base-uncased', 'bert-large-uncased']
 
 models_to_run = size_models + multi_bert_models
-#
-# for model_name in models_to_run:
-#     if 'large' in model_name:
-#         model_class = 'bert-large-uncased'
-#     else:
-#         model_class = 'bert-base-uncased'
-#     subprocess.run([
-#         "python", "eval_discriminative_models.py",
-#         # "--skip-intersentence",
-#         f"--output-file={model_name}_out.json",
-#         f"--intrasentence-model={model_name}",
-#         f"--intersentence-model={model_name}",
-#         '--pretrained-class=bert-base-uncased'
-#     ])
-#
-#     subprocess.run([
-#         "python" , "evaluation.py",
-#         "--gold-file=../data/dev.json",
-#         f"--predictions-file=predictions/{model_name}_out.json",
-#         f"--output-file=output/{model_name}_icat.json",
-#         "--skip-intersentence=False",
-#     ])
+
+for model_name in models_to_run:
+    if 'large' in model_name:
+        model_class = 'bert-large-uncased'
+    else:
+        model_class = 'bert-base-uncased'
+    subprocess.run([
+        "python", "eval_discriminative_models.py",
+        # "--skip-intersentence",
+        f"--output-file={model_name}_out.json",
+        f"--intrasentence-model={model_name}",
+        f"--intersentence-model={model_name}",
+        '--pretrained-class=bert-base-uncased'
+    ])
+
+    subprocess.run([
+        "python" , "evaluation.py",
+        "--gold-file=../data/dev.json",
+        f"--predictions-file=predictions/{model_name}_out.json",
+        f"--output-file=output/{model_name}_icat.json",
+        "--skip-intersentence=False",
+    ])
 
 
 only_local_bias_models = [
